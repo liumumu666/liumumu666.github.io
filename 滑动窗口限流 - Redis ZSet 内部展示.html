@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>滑动窗口限流 - Redis ZSet 内部展示</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            redis: '#E4405F',
+            zset: '#0078D7',
+            score: '#FFB900',
+            member: '#107C10',
+            expired: '#8A8A8A',
+            current: '#00B7C3'
+          },
+          fontFamily: {
+            inter: ['Inter', 'sans-serif'],
+            code: ['Fira Code', 'monospace']
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .redis-cell {
+        @apply border border-gray-200 rounded p-2 transition-all duration-300;
+      }
+      .redis-cell-active {
+        @apply bg-current/10 border-current;
+      }
+      .redis-cell-expired {
+        @apply bg-expired/10 border-expired text-expired;
+      }
+      .window-marker {
+        @apply absolute h-full w-1 bg-red-500 z-10 transition-all duration-500;
+      }
+      .pulse {
+        animation: pulse 2s infinite;
+      }
+      .slide-in {
+        animation: slideIn 0.5s ease-out;
+      }
+      .fade-out {
+        animation: fadeOut 0.5s ease-in;
+      }
+    }
+    
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+    
+    @keyframes slideIn {
+      from { transform: translateX(-20px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    
+    @keyframes fadeOut {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+  </style>
+</head>
+
+<body class="font-inter bg-gray-50 text-gray-800">
+  <header class="bg-white shadow-sm">
+    <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+      <div class="flex items-center space-x-2">
+        <i class="fa fa-database text-redis text-2xl"></i>
+        <h1 class="text-xl md:text-2xl font-bold">滑动窗口限流 - Redis ZSet 内部展示</h1>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 py-8">
+    <section class="mb-8">
+      <div class="bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-xl font-semibold mb-4">原理说明</h2>
+        <p class="text-gray-700 mb-4">
+          滑动窗口限流通过 Redis ZSet 存储请求信息，其中：
+        </p>
+        <ul class="list-disc pl-6 text-gray-700 space-y-2">
+          <li><span class="font-medium text-zset">ZSet 键（key）</span>：标识限流维度（如接口名、用户ID等）</li>
+          <li><span class="font-medium text-score">Score</span>：请求的时间戳（用于排序和判断是否在窗口内）</li>
+          <li><span class="font-medium text-member">Member</span>：请求的唯一标识（如UUID，确保元素唯一）</li>
+          <li>随时间滑动，自动清理窗口外的过期请求（Score 小于窗口起始时间的元素）</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 控制面板 -->
+    <section class="mb-8">
+      <div class="bg-white p-4 rounded-lg shadow-sm">
+        <div class="grid md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">窗口大小 (秒)</label>
+            <input type="range" id="window-size" min="1" max="5" value="3" 
+                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-redis">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>1s</span>
+              <span id="window-size-value">3s</span>
+              <span>5s</span>
+            </div>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">限流阈值</label>
+            <input type="range" id="limit-threshold" min="3" max="10" value="5" 
+                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-redis">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>3</span>
+              <span id="limit-value">5</span>
+              <span>10</span>
+            </div>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">请求频率</label>
+            <input type="range" id="request-rate" min="1" max="10" value="5" 
+                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-redis">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>低</span>
+              <span id="rate-value">中</span>
+              <span>高</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="mt-4 flex justify-center">
+          <button id="start-animation" class="bg-redis hover:bg-redis/90 text-white px-6 py-2 rounded-lg flex items-center transition-colors">
+            <i class="fa fa-play mr-2"></i> 开始演示
+          </button>
+          <button id="reset-animation" class="ml-4 bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded-lg flex items-center transition-colors">
+            <i class="fa fa-refresh mr-2"></i> 重置
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 时间轴与窗口 -->
+    <section class="mb-8">
+      <div class="bg-white p-4 rounded-lg shadow-sm">
+        <h3 class="text-lg font-medium mb-3">时间窗口</h3>
+        <div class="relative h-16 border border-gray-200 rounded overflow-hidden">
+          <!-- 时间刻度 -->
+          <div class="absolute bottom-0 left-0 right-0 h-4 flex">
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">0s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">1s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">2s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">3s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">4s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">5s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">6s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">7s</div>
+            <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500">8s</div>
+            <div class="flex-1 text-center text-xs text-gray-500">9s</div>
+          </div>
+          
+          <!-- 滑动窗口 -->
+          <div id="time-window" class="absolute top-0 h-full bg-zset/20 border-l-2 border-r-2 border-zset transition-all duration-500" style="left: 0%; width: 30%"></div>
+          
+          <!-- 当前时间标记 -->
+          <div id="current-time-marker" class="window-marker" style="left: 0%"></div>
+          
+          <!-- 窗口起始标记 -->
+          <div id="window-start-marker" class="window-marker bg-green-500" style="left: 0%"></div>
+        </div>
+        
+        <div class="flex justify-between mt-2 text-sm text-gray-600">
+          <div>当前时间: <span id="current-time-display" class="font-medium">0s</span></div>
+          <div>窗口范围: <span id="window-range-display" class="font-medium">0s - 3s</span></div>
+          <div>当前请求数: <span id="request-count" class="font-medium">0</span></div>
+          <div>状态: <span id="status-display" class="font-medium text-green-600">正常</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Redis 内部展示 -->
+    <section>
+      <div class="bg-white p-6 rounded-xl shadow-sm">
+        <h3 class="text-lg font-medium mb-4 flex items-center">
+          <i class="fa fa-database text-redis mr-2"></i>
+          Redis 内部 ZSet 存储状态
+        </h3>
+        
+        <!-- ZSet 键名 -->
+        <div class="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
+          <div class="text-sm text-gray-500">ZSet Key:</div>
+          <div class="font-code font-medium text-zset">order:create:slide:limiter</div>
+        </div>
+        
+        <!-- ZSet 结构说明 -->
+        <div class="grid grid-cols-3 gap-2 mb-3 text-sm font-medium text-center">
+          <div class="p-2 bg-gray-100 rounded">索引</div>
+          <div class="p-2 bg-gray-100 rounded text-score">Score (时间戳)</div>
+          <div class="p-2 bg-gray-100 rounded text-member">Member (请求ID)</div>
+        </div>
+        
+        <!-- ZSet 成员列表 -->
+        <div id="zset-members" class="space-y-2 max-h-96 overflow-y-auto pr-2">
+          <div class="text-center text-gray-500 py-8 border border-dashed border-gray-200 rounded">
+            等待请求生成...
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bg-gray-800 text-white py-6 mt-12">
+    <div class="container mx-auto px-4 text-center text-sm">
+      <p>滑动窗口限流 Redis ZSet 可视化演示 | 基于 Redis ZSet 的时间戳排序特性实现</p>
+    </div>
+  </footer>
+
+  <script>
+    // 控制面板交互
+    const windowSizeInput = document.getElementById('window-size');
+    const windowSizeValue = document.getElementById('window-size-value');
+    const limitInput = document.getElementById('limit-threshold');
+    const limitValue = document.getElementById('limit-value');
+    const rateInput = document.getElementById('request-rate');
+    const rateValue = document.getElementById('rate-value');
+    
+    // 状态变量
+    let currentTime = 0; // 当前时间（秒）
+    let zsetMembers = []; // 存储ZSet成员 { id, score, member, element }
+    let animationInterval;
+    let isAnimating = false;
+    
+    // 更新窗口大小显示
+    windowSizeInput.addEventListener('input', function() {
+      const value = this.value;
+      windowSizeValue.textContent = `${value}s`;
+      updateTimeWindow();
+    });
+    
+    // 更新限流阈值显示
+    limitInput.addEventListener('input', function() {
+      limitValue.textContent = this.value;
+      updateStatus();
+    });
+    
+    // 更新请求频率显示
+    rateInput.addEventListener('input', function() {
+      const rateText = ['极低', '低', '较低', '中低', '中', '中高', '较高', '高', '很高', '极高'];
+      rateValue.textContent = rateText[this.value - 1];
+    });
+    
+    // 开始/暂停动画
+    document.getElementById('start-animation').addEventListener('click', function() {
+      if (isAnimating) {
+        // 暂停动画
+        clearInterval(animationInterval);
+        this.innerHTML = '<i class="fa fa-play mr-2"></i> 开始演示';
+        isAnimating = false;
+        return;
+      }
+      
+      // 开始动画
+      this.innerHTML = '<i class="fa fa-pause mr-2"></i> 暂停演示';
+      isAnimating = true;
+      
+      const rate = 11 - parseInt(rateInput.value); // 反转值，高rate对应低间隔
+      const interval = rate * 200; // 毫秒
+      
+      animationInterval = setInterval(() => {
+        currentTime += 0.2; // 每次增加0.2秒
+        
+        // 更新时间窗口
+        updateTimeWindow();
+        
+        // 随机添加请求（概率随频率调整）
+        const probability = 0.1 + (parseInt(rateInput.value) / 10);
+        if (Math.random() < probability) {
+          addNewRequest();
+        }
+        
+        // 清理过期请求
+        cleanExpiredRequests();
+        
+        // 更新状态显示
+        updateStatus();
+        
+        // 重置时间（循环演示）
+        if (currentTime >= 10) {
+          currentTime = 0;
+        }
+      }, interval);
+    });
+    
+    // 重置动画
+    document.getElementById('reset-animation').addEventListener('click', function() {
+      clearInterval(animationInterval);
+      currentTime = 0;
+      zsetMembers = [];
+      isAnimating = false;
+      
+      // 清空成员列表
+      document.getElementById('zset-members').innerHTML = `
+        <div class="text-center text-gray-500 py-8 border border-dashed border-gray-200 rounded">
+          等待请求生成...
+        </div>
+      `;
+      
+      // 重置时间窗口
+      updateTimeWindow();
+      
+      // 重置状态
+      updateStatus();
+      
+      // 重置按钮文本
+      document.getElementById('start-animation').innerHTML = '<i class="fa fa-play mr-2"></i> 开始演示';
+    });
+    
+    // 更新时间窗口显示
+    function updateTimeWindow() {
+      const windowSize = parseInt(windowSizeInput.value);
+      const windowStart = Math.max(0, currentTime - windowSize);
+      
+      // 计算百分比位置（总时长10秒）
+      const currentTimePercent = (currentTime / 10) * 100;
+      const windowStartPercent = (windowStart / 10) * 100;
+      const windowWidthPercent = (windowSize / 10) * 100;
+      
+      // 更新窗口位置
+      const timeWindow = document.getElementById('time-window');
+      timeWindow.style.left = `${windowStartPercent}%`;
+      timeWindow.style.width = `${windowWidthPercent}%`;
+      
+      // 更新时间标记
+      document.getElementById('current-time-marker').style.left = `${currentTimePercent}%`;
+      document.getElementById('window-start-marker').style.left = `${windowStartPercent}%`;
+      
+      // 更新时间文本
+      document.getElementById('current-time-display').textContent = `${currentTime.toFixed(1)}s`;
+      document.getElementById('window-range-display').textContent = 
+        `${windowStart.toFixed(1)}s - ${currentTime.toFixed(1)}s`;
+    }
+    
+    // 添加新请求到ZSet
+    function addNewRequest() {
+      const score = currentTime; // 用当前时间作为score（简化演示，实际为毫秒级时间戳）
+      const member = 'req-' + Math.random().toString(36).substring(2, 8); // 生成短ID
+      const id = Date.now(); // 唯一标识
+      
+      // 创建DOM元素
+      const element = document.createElement('div');
+      element.className = 'grid grid-cols-3 gap-2 redis-cell slide-in';
+      element.dataset.id = id;
+      element.innerHTML = `
+        <div class="text-center font-medium"></div> <!-- 索引会动态更新 -->
+        <div class="text-center text-score font-code">${score.toFixed(1)}</div>
+        <div class="text-center text-member font-code text-sm truncate">${member}</div>
+      `;
+      
+      // 添加到ZSet成员列表
+      zsetMembers.push({ id, score, member, element });
+      
+      // 重新排序（按score升序）
+      zsetMembers.sort((a, b) => a.score - b.score);
+      
+      // 更新显示
+      renderZSetMembers();
+    }
+    
+    // 清理过期请求（窗口外的元素）
+    function cleanExpiredRequests() {
+      const windowSize = parseInt(windowSizeInput.value);
+      const windowStart = currentTime - windowSize;
+      const expiredMembers = zsetMembers.filter(member => member.score < windowStart);
+      
+      // 标记过期元素
+      expiredMembers.forEach(member => {
+        member.element.classList.add('redis-cell-expired');
+        member.element.classList.remove('redis-cell-active');
+      });
+      
+      // 延迟移除（展示过期效果）
+      setTimeout(() => {
+        expiredMembers.forEach(member => {
+          member.element.classList.add('fade-out');
+          setTimeout(() => {
+            if (member.element.parentNode) {
+              member.element.parentNode.removeChild(member.element);
+            }
+            // 从数组中移除
+            zsetMembers = zsetMembers.filter(m => m.id !== member.id);
+            renderZSetMembers(); // 重新渲染索引
+          }, 500);
+        });
+      }, 300);
+    }
+    
+    // 渲染ZSet成员列表
+    function renderZSetMembers() {
+      const container = document.getElementById('zset-members');
+      
+      if (zsetMembers.length === 0) {
+        container.innerHTML = `
+          <div class="text-center text-gray-500 py-8 border border-dashed border-gray-200 rounded">
+            等待请求生成...
+          </div>
+        `;
+        return;
+      }
+      
+      // 清空容器（保留元素但重新排序）
+      container.innerHTML = '';
+      
+      // 添加所有成员并更新索引
+      const windowSize = parseInt(windowSizeInput.value);
+      const windowStart = currentTime - windowSize;
+      
+      zsetMembers.forEach((member, index) => {
+        // 更新索引
+        member.element.querySelector('div:first-child').textContent = index + 1;
+        
+        // 标记当前窗口内的元素
+        if (member.score >= windowStart) {
+          member.element.classList.add('redis-cell-active');
+          member.element.classList.remove('redis-cell-expired');
+        } else {
+          member.element.classList.remove('redis-cell-active');
+        }
+        
+        container.appendChild(member.element);
+      });
+    }
+    
+    // 更新状态显示
+    function updateStatus() {
+      const windowSize = parseInt(windowSizeInput.value);
+      const limit = parseInt(limitInput.value);
+      const windowStart = currentTime - windowSize;
+      
+      // 统计当前窗口内的请求数
+      const currentCount = zsetMembers.filter(member => member.score >= windowStart).length;
+      
+      // 更新计数
+      document.getElementById('request-count').textContent = currentCount;
+      
+      // 更新状态
+      const statusElement = document.getElementById('status-display');
+      if (currentCount >= limit) {
+        statusElement.textContent = '限流中';
+        statusElement.className = 'font-medium text-red-600';
+      } else {
+        statusElement.textContent = '正常';
+        statusElement.className = 'font-medium text-green-600';
+      }
+    }
+    
+    // 初始化
+    updateTimeWindow();
+  </script>
+</body>
+</html>
