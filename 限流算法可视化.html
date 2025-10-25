@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>限流算法可视化 | 固定窗口 vs 滑动窗口</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#165DFF',
+            secondary: '#36CFC9',
+            success: '#52C41A',
+            danger: '#FF4D4F',
+            warning: '#FAAD14',
+            dark: '#1D2129',
+            light: '#F2F3F5'
+          },
+          fontFamily: {
+            inter: ['Inter', 'sans-serif'],
+            code: ['Fira Code', 'monospace']
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .window-grid {
+        background-size: 50px 50px;
+        background-image: 
+          linear-gradient(to right, rgba(22, 93, 255, 0.1) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(22, 93, 255, 0.1) 1px, transparent 1px);
+      }
+      .request-pulse {
+        animation: pulse 1.5s infinite;
+      }
+      .slide-animation {
+        animation: slide 10s linear infinite;
+      }
+      .glow {
+        filter: drop-shadow(0 0 6px rgba(22, 93, 255, 0.6));
+      }
+    }
+    
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.7; }
+      50% { transform: scale(1.05); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.7; }
+    }
+    
+    @keyframes slide {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-100%); }
+    }
+  </style>
+</head>
+
+<body class="font-inter bg-gray-50 text-dark">
+  <!-- 导航栏 -->
+  <header class="bg-white shadow-sm sticky top-0 z-50 transition-all duration-300">
+    <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+      <div class="flex items-center space-x-2">
+        <i class="fa fa-shield text-primary text-2xl"></i>
+        <h1 class="text-xl md:text-2xl font-bold text-primary">限流算法可视化</h1>
+      </div>
+      <nav class="hidden md:flex space-x-6">
+        <a href="#concept" class="text-gray-600 hover:text-primary transition-colors">概念</a>
+        <a href="#animation" class="text-gray-600 hover:text-primary transition-colors">动画演示</a>
+        <a href="#comparison" class="text-gray-600 hover:text-primary transition-colors">对比分析</a>
+        <a href="#code" class="text-gray-600 hover:text-primary transition-colors">代码示例</a>
+      </nav>
+      <button class="md:hidden text-gray-600" id="mobile-menu-button">
+        <i class="fa fa-bars text-xl"></i>
+      </button>
+    </div>
+    <!-- 移动端菜单 -->
+    <div id="mobile-menu" class="hidden md:hidden bg-white border-t">
+      <div class="container mx-auto px-4 py-2 flex flex-col space-y-3">
+        <a href="#concept" class="py-2 text-gray-600 hover:text-primary transition-colors">概念</a>
+        <a href="#animation" class="py-2 text-gray-600 hover:text-primary transition-colors">动画演示</a>
+        <a href="#comparison" class="py-2 text-gray-600 hover:text-primary transition-colors">对比分析</a>
+        <a href="#code" class="py-2 text-gray-600 hover:text-primary transition-colors">代码示例</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 py-8">
+    <!-- 概念介绍 -->
+    <section id="concept" class="mb-16">
+      <div class="max-w-3xl mx-auto">
+        <h2 class="text-3xl font-bold mb-6 text-center">限流算法：固定窗口 vs 滑动窗口</h2>
+        <p class="text-gray-700 mb-6 leading-relaxed">
+          限流是保护系统免受流量冲击的关键技术，通过控制单位时间内的请求数量来确保系统稳定。
+          以下展示两种常见的限流算法：固定窗口限流和滑动窗口限流的工作原理与差异。
+        </p>
+        
+        <div class="grid md:grid-cols-2 gap-8 mt-10">
+          <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100 hover:shadow-lg transition-shadow">
+            <div class="flex items-center mb-4">
+              <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center mr-3">
+                <i class="fa fa-square text-primary"></i>
+              </div>
+              <h3 class="text-xl font-semibold">固定窗口限流</h3>
+            </div>
+            <p class="text-gray-600">
+              将时间划分为固定长度的区间（如1秒），每个区间独立计数，当请求数超过阈值时触发限流。
+              实现简单但可能在窗口切换时出现流量突刺。
+            </p>
+          </div>
+          
+          <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100 hover:shadow-lg transition-shadow">
+            <div class="flex items-center mb-4">
+              <div class="w-10 h-10 rounded-full bg-secondary/10 flex items-center justify-center mr-3">
+                <i class="fa fa-arrows-h text-secondary"></i>
+              </div>
+              <h3 class="text-xl font-semibold">滑动窗口限流</h3>
+            </div>
+            <p class="text-gray-600">
+              时间窗口随时间动态滑动，通过统计窗口内的请求总数判断是否限流。
+              流量控制更平滑，避免了固定窗口的边界突刺问题，但实现相对复杂。
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 动画演示区 -->
+    <section id="animation" class="mb-16">
+      <h2 class="text-2xl font-bold mb-8 text-center">算法动画演示</h2>
+      
+      <!-- 控制面板 -->
+      <div class="bg-white p-4 rounded-lg shadow-sm mb-8 max-w-3xl mx-auto">
+        <div class="grid md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">窗口大小 (秒)</label>
+            <input type="range" id="window-size" min="1" max="5" value="2" 
+                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>1s</span>
+              <span id="window-size-value">2s</span>
+              <span>5s</span>
+            </div>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">限流阈值</label>
+            <input type="range" id="limit-threshold" min="3" max="15" value="6" 
+                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>3</span>
+              <span id="limit-value">6</span>
+              <span>15</span>
+            </div>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">请求频率</label>
+            <input type="range" id="request-rate" min="1" max="10" value="5" 
+                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary">
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>低</span>
+              <span id="rate-value">中</span>
+              <span>高</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="mt-4 flex justify-center">
+          <button id="start-animation" class="bg-primary hover:bg-primary/90 text-white px-6 py-2 rounded-lg flex items-center transition-colors">
+            <i class="fa fa-play mr-2"></i> 开始演示
+          </button>
+          <button id="reset-animation" class="ml-4 bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded-lg flex items-center transition-colors">
+            <i class="fa fa-refresh mr-2"></i> 重置
+          </button>
+        </div>
+      </div>
+      
+      <!-- 动画展示区 -->
+      <div class="grid md:grid-cols-2 gap-8">
+        <!-- 固定窗口动画 -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+          <div class="bg-primary text-white p-4">
+            <h3 class="font-semibold text-lg flex items-center">
+              <i class="fa fa-square mr-2"></i> 固定窗口限流
+            </h3>
+          </div>
+          <div class="p-4">
+            <div class="flex justify-between text-sm mb-2">
+              <div>当前窗口请求数: <span id="fixed-count" class="font-medium">0</span></div>
+              <div>状态: <span id="fixed-status" class="font-medium text-success">正常</span></div>
+            </div>
+            <div class="relative h-64 window-grid overflow-hidden border border-gray-200 rounded-lg" id="fixed-window-container">
+              <!-- 时间轴 -->
+              <div class="absolute bottom-0 left-0 right-0 h-6 flex">
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6" id="fixed-tick-1">0s</div>
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6" id="fixed-tick-2">1s</div>
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6" id="fixed-tick-3">2s</div>
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6" id="fixed-tick-4">3s</div>
+                <div class="flex-1 text-center text-xs text-gray-500 pt-6" id="fixed-tick-5">4s</div>
+              </div>
+              
+              <!-- 固定窗口分隔线 -->
+              <div class="absolute top-0 bottom-6 w-1 bg-primary/30" style="left: 20%"></div>
+              <div class="absolute top-0 bottom-6 w-1 bg-primary/30" style="left: 40%"></div>
+              <div class="absolute top-0 bottom-6 w-1 bg-primary/30" style="left: 60%"></div>
+              <div class="absolute top-0 bottom-6 w-1 bg-primary/30" style="left: 80%"></div>
+              
+              <!-- 当前窗口高亮 -->
+              <div id="fixed-current-window" class="absolute top-0 bottom-6 bg-primary/5" style="left: 0%; width: 20%"></div>
+              
+              <!-- 请求将通过JS动态添加 -->
+            </div>
+          </div>
+        </div>
+        
+        <!-- 滑动窗口动画 -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+          <div class="bg-secondary text-white p-4">
+            <h3 class="font-semibold text-lg flex items-center">
+              <i class="fa fa-arrows-h mr-2"></i> 滑动窗口限流
+            </h3>
+          </div>
+          <div class="p-4">
+            <div class="flex justify-between text-sm mb-2">
+              <div>当前窗口请求数: <span id="sliding-count" class="font-medium">0</span></div>
+              <div>状态: <span id="sliding-status" class="font-medium text-success">正常</span></div>
+            </div>
+            <div class="relative h-64 window-grid overflow-hidden border border-gray-200 rounded-lg" id="sliding-window-container">
+              <!-- 时间轴 -->
+              <div class="absolute bottom-0 left-0 right-0 h-6 flex">
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6">0s</div>
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6">1s</div>
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6">2s</div>
+                <div class="flex-1 border-r border-gray-300 text-center text-xs text-gray-500 pt-6">3s</div>
+                <div class="flex-1 text-center text-xs text-gray-500 pt-6">4s</div>
+              </div>
+              
+              <!-- 滑动窗口高亮 -->
+              <div id="sliding-current-window" class="absolute top-0 bottom-6 bg-secondary/10 border border-secondary/30" style="left: 0%; width: 20%"></div>
+              
+              <!-- 请求将通过JS动态添加 -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 优缺点对比表格 -->
+    <section id="comparison" class="mb-16">
+      <h2 class="text-2xl font-bold mb-8 text-center">算法优缺点对比</h2>
+      
+      <div class="overflow-x-auto bg-white rounded-xl shadow-md">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th scope="col" class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">对比维度</th>
+              <th scope="col" class="px-6 py-4 text-left text-xs font-medium text-primary uppercase tracking-wider">固定窗口限流</th>
+              <th scope="col" class="px-6 py-4 text-left text-xs font-medium text-secondary uppercase tracking-wider">滑动窗口限流</th>
+            </tr>
+          </thead>
+          <tbody class="bg-white divide-y divide-gray-200">
+            <tr>
+              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">实现复杂度</td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-success"><i class="fa fa-check-circle mr-1"></i> 简单</span>
+                <p class="mt-1 text-xs text-gray-500">仅需基础计数器和过期时间</p>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-warning"><i class="fa fa-exclamation-circle mr-1"></i> 中等</span>
+                <p class="mt-1 text-xs text-gray-500">需维护时间窗口内的请求记录</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">流量控制平滑度</td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-warning"><i class="fa fa-exclamation-circle mr-1"></i> 一般</span>
+                <p class="mt-1 text-xs text-gray-500">窗口边界可能出现流量突刺</p>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-success"><i class="fa fa-check-circle mr-1"></i> 优秀</span>
+                <p class="mt-1 text-xs text-gray-500">流量控制更精细和平滑</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">内存占用</td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-success"><i class="fa fa-check-circle mr-1"></i> 低</span>
+                <p class="mt-1 text-xs text-gray-500">仅存储计数器，占用极少内存</p>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-warning"><i class="fa fa-exclamation-circle mr-1"></i> 中</span>
+                <p class="mt-1 text-xs text-gray-500">需存储窗口内所有请求的时间戳</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">时间精度</td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-warning"><i class="fa fa-exclamation-circle mr-1"></i> 窗口级</span>
+                <p class="mt-1 text-xs text-gray-500">精度为窗口大小的整数倍</p>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                <span class="text-success"><i class="fa fa-check-circle mr-1"></i> 毫秒级</span>
+                <p class="mt-1 text-xs text-gray-500">可精确到毫秒级时间控制</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">适用场景</td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                对流量平滑度要求不高，<br>
+                追求简单实现的场景
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                高并发场景，对流量平滑度<br>
+                要求较高的核心业务
+              </td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">典型应用</td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                非核心接口限流、<br>
+                简单的API访问控制
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                支付接口、下单接口、<br>
+                秒杀活动等高并发场景
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 代码示例 -->
+    <section id="code" class="mb-16">
+      <h2 class="text-2xl font-bold mb-8 text-center">核心代码示例</h2>
+      
+      <div class="grid md:grid-cols-2 gap-8">
+        <!-- 固定窗口代码 -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+          <div class="bg-primary text-white p-4">
+            <h3 class="font-semibold text-lg flex items-center">
+              <i class="fa fa-square mr-2"></i> 固定窗口限流 (Java + Redis)
+            </h3>
+          </div>
+          <div class="p-4">
+            <pre class="font-code text-sm bg-gray-50 p-4 rounded-lg overflow-x-auto"><code>/**
+ * 固定窗口限流工具类
+ */
+@Component
+public class RedisFixedWindowLimiter {
+
+    private final RedisTemplate<String, String> redisTemplate;
+
+    public RedisFixedWindowLimiter(RedisTemplate<String, String> redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * 固定窗口限流判断
+     * @param keyPrefix 限流key前缀
+     * @param windowSize 窗口大小(秒)
+     * @param limit 窗口内限流阈值
+     * @return true: 允许请求; false: 限流
+     */
+    public boolean isAllowed(String keyPrefix, int windowSize, int limit) {
+        // 生成限流key，基于当前时间窗口
+        long currentWindow = System.currentTimeMillis() / (windowSize * 1000);
+        String limitKey = keyPrefix + ":fixed:limiter:" + currentWindow;
+        
+        // 自增计数
+        Long count = redisTemplate.opsForValue().increment(limitKey);
+        
+        // 第一次设置过期时间
+        if (count != null && count == 1) {
+            redisTemplate.expire(limitKey, windowSize, TimeUnit.SECONDS);
+        }
+        
+        // 判断是否超过阈值
+        return count != null && count <= limit;
+    }
+}</code></pre>
+            <div class="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <p class="text-sm text-gray-700"><strong>核心逻辑：</strong>将时间划分为固定窗口，每个窗口独立计数，超过阈值则限流。实现简单但存在窗口边界流量突刺问题。</p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 滑动窗口代码 -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+          <div class="bg-secondary text-white p-4">
+            <h3 class="font-semibold text-lg flex items-center">
+              <i class="fa fa-arrows-h mr-2"></i> 滑动窗口限流 (Java + Redis)
+            </h3>
+          </div>
+          <div class="p-4">
+            <pre class="font-code text-sm bg-gray-50 p-4 rounded-lg overflow-x-auto"><code>/**
+ * 滑动窗口限流工具类
+ */
+@Component
+public class RedisSlideWindowLimiter {
+
+    private final RedisTemplate<String, String> redisTemplate;
+    
+    // Lua脚本保证操作原子性
+    private static final String LUA_SCRIPT = "local key = KEYS[1]\n" +
+            "local windowSize = tonumber(ARGV[1])\n" +
+            "local limit = tonumber(ARGV[2])\n" +
+            "local requestId = ARGV[3]\n" +
+            "local currentTimestamp = tonumber(ARGV[4])\n" +
+            "\n" +
+            "-- 清理时间窗口外的请求\n" +
+            "local expireTimestamp = currentTimestamp - windowSize\n" +
+            "redis.call('ZREMRANGEBYSCORE', key, 0, expireTimestamp)\n" +
+            "\n" +
+            "-- 添加当前请求\n" +
+            "redis.call('ZADD', key, currentTimestamp, requestId)\n" +
+            "\n" +
+            "-- 设置过期时间\n" +
+            "redis.call('EXPIRE', key, windowSize + 1)\n" +
+            "\n" +
+            "-- 统计当前窗口内的请求数\n" +
+            "local count = redis.call('ZCARD', key)\n" +
+            "\n" +
+            "-- 判断是否超过限流阈值\n" +
+            "return count <= limit";
+
+    public RedisSlideWindowLimiter(RedisTemplate<String, String> redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * 滑动窗口限流判断
+     * @param keyPrefix 限流key前缀
+     * @param windowSize 窗口大小(秒)
+     * @param limit 窗口内限流阈值
+     * @return true: 允许请求; false: 限流
+     */
+    public boolean isAllowed(String keyPrefix, int windowSize, int limit) {
+        String limitKey = keyPrefix + ":slide:limiter";
+        String requestId = UUID.randomUUID().toString();
+        long currentTimestamp = System.currentTimeMillis() / 1000;
+        
+        DefaultRedisScript<Boolean> script = new DefaultRedisScript<>();
+        script.setScriptText(LUA_SCRIPT);
+        script.setResultType(Boolean.class);
+        
+        return redisTemplate.execute(script, 
+                Collections.singletonList(limitKey), 
+                String.valueOf(windowSize), 
+                String.valueOf(limit), 
+                requestId, 
+                String.valueOf(currentTimestamp));
+    }
+}</code></pre>
+            <div class="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <p class="text-sm text-gray-700"><strong>核心逻辑：</strong>使用Redis ZSet存储请求时间戳，动态维护时间窗口，通过Lua脚本保证操作原子性，有效避免固定窗口的流量突刺问题。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 总结 -->
+    <section class="mb-16 max-w-3xl mx-auto bg-white p-6 rounded-xl shadow-md border border-gray-100">
+      <h2 class="text-2xl font-bold mb-4 text-center">总结</h2>
+      <p class="text-gray-700 mb-4 leading-relaxed">
+        固定窗口限流实现简单、资源消耗低，适合对流量控制精度要求不高的场景；滑动窗口限流通过更精细的时间粒度控制，避免了流量突刺问题，适合高并发、对稳定性要求高的核心业务。
+      </p>
+      <p class="text-gray-700 leading-relaxed">
+        在实际应用中，应根据业务特性、流量规模和系统承载能力选择合适的限流策略，也可以结合多种限流算法实现多层次的流量防护体系。
+      </p>
+    </section>
+  </main>
+
+  <footer class="bg-dark text-white py-8">
+    <div class="container mx-auto px-4">
+      <div class="flex flex-col md:flex-row justify-between items-center">
+        <div class="mb-4 md:mb-0">
+          <div class="flex items-center justify-center md:justify-start">
+            <i class="fa fa-shield text-primary text-2xl mr-2"></i>
+            <span class="font-bold text-xl">限流算法可视化</span>
+          </div>
+          <p class="text-gray-400 text-sm mt-2 text-center md:text-left">直观展示固定窗口与滑动窗口限流的工作原理</p>
+        </div>
+        <div class="flex space-x-6">
+          <a href="#" class="text-gray-400 hover:text-primary transition-colors">
+            <i class="fa fa-github text-xl"></i>
+          </a>
+          <a href="#" class="text-gray-400 hover:text-primary transition-colors">
+            <i class="fa fa-twitter text-xl"></i>
+          </a>
+          <a href="#" class="text-gray-400 hover:text-primary transition-colors">
+            <i class="fa fa-linkedin text-xl"></i>
+          </a>
+        </div>
+      </div>
+      <div class="border-t border-gray-700 mt-6 pt-6 text-center text-gray-400 text-sm">
+        &copy; 2023 限流算法可视化演示 | 基于Tailwind CSS构建
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // 移动端菜单切换
+    document.getElementById('mobile-menu-button').addEventListener('click', function() {
+      const menu = document.getElementById('mobile-menu');
+      menu.classList.toggle('hidden');
+    });
+    
+    // 平滑滚动
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        
+        const targetId = this.getAttribute('href');
+        const targetElement = document.querySelector(targetId);
+        
+        if (targetElement) {
+          window.scrollTo({
+            top: targetElement.offsetTop - 80,
+            behavior: 'smooth'
+          });
+          
+          // 关闭移动菜单
+          document.getElementById('mobile-menu').classList.add('hidden');
+        }
+      });
+    });
+    
+    // 导航栏滚动效果
+    window.addEventListener('scroll', function() {
+      const header = document.querySelector('header');
+      if (window.scrollY > 10) {
+        header.classList.add('py-2');
+        header.classList.remove('py-4');
+      } else {
+        header.classList.add('py-4');
+        header.classList.remove('py-2');
+      }
+    });
+    
+    // 控制面板交互
+    const windowSizeInput = document.getElementById('window-size');
+    const windowSizeValue = document.getElementById('window-size-value');
+    const limitInput = document.getElementById('limit-threshold');
+    const limitValue = document.getElementById('limit-value');
+    const rateInput = document.getElementById('request-rate');
+    const rateValue = document.getElementById('rate-value');
+    
+    windowSizeInput.addEventListener('input', function() {
+      windowSizeValue.textContent = `${this.value}s`;
+      updateWindowVisualization();
+    });
+    
+    limitInput.addEventListener('input', function() {
+      limitValue.textContent = this.value;
+    });
+    
+    rateInput.addEventListener('input', function() {
+      const rateText = ['低', '较低', '中', '较高', '高', '很高', '极高', '超高', '极限', '满负载'];
+      rateValue.textContent = rateText[this.value - 1];
+    });
+    
+    // 更新窗口可视化
+    function updateWindowVisualization() {
+      const windowSize = parseInt(windowSizeInput.value);
+      const percent = (windowSize / 5) * 100;
+      
+      document.getElementById('fixed-current-window').style.width = `${percent}%`;
+      document.getElementById('sliding-current-window').style.width = `${percent}%`;
+    }
+    
+    // 动画控制变量
+    let animationInterval;
+    let currentTime = 0;
+    let fixedWindowRequests = [];
+    let slidingWindowRequests = [];
+    let isAnimating = false;
+    
+    // 开始动画
+    document.getElementById('start-animation').addEventListener('click', function() {
+      if (isAnimating) {
+        // 停止动画
+        clearInterval(animationInterval);
+        this.innerHTML = '<i class="fa fa-play mr-2"></i> 开始演示';
+        isAnimating = false;
+        return;
+      }
+      
+      // 开始动画
+      this.innerHTML = '<i class="fa fa-pause mr-2"></i> 暂停演示';
+      isAnimating = true;
+      
+      const windowSize = parseInt(windowSizeInput.value);
+      const limit = parseInt(limitInput.value);
+      const rate = 11 - parseInt(rateInput.value); // 反转值，使高rate对应低间隔
+      const interval = rate * 100; // 毫秒
+      
+      animationInterval = setInterval(() => {
+        currentTime += 0.1; // 每次增加0.1秒
+        
+        // 更新固定窗口
+        updateFixedWindow(windowSize, limit);
+        
+        // 更新滑动窗口
+        updateSlidingWindow(windowSize, limit);
+        
+        // 随机添加请求
+        if (Math.random() > 0.7) { // 70%概率添加请求
+          addRequestToFixedWindow(currentTime);
+          addRequestToSlidingWindow(currentTime);
+        }
+        
+        // 重置时间（循环演示）
+        if (currentTime >= 5) {
+          currentTime = 0;
+        }
+      }, interval);
+    });
+    
+    // 重置动画
+    document.getElementById('reset-animation').addEventListener('click', function() {
+      clearInterval(animationInterval);
+      currentTime = 0;
+      fixedWindowRequests = [];
+      slidingWindowRequests = [];
+      isAnimating = false;
+      
+      // 清空容器
+      document.getElementById('fixed-window-container').querySelectorAll('.request').forEach(el => el.remove());
+      document.getElementById('sliding-window-container').querySelectorAll('.request').forEach(el => el.remove());
+      
+      // 重置状态
+      document.getElementById('fixed-count').textContent = '0';
+      document.getElementById('fixed-status').textContent = '正常';
+      document.getElementById('fixed-status').className = 'font-medium text-success';
+      document.getElementById('sliding-count').textContent = '0';
+      document.getElementById('sliding-status').textContent = '正常';
+      document.getElementById('sliding-status').className = 'font-medium text-success';
+      
+      // 重置按钮文本
+      document.getElementById('start-animation').innerHTML = '<i class="fa fa-play mr-2"></i> 开始演示';
+    });
+    
+    // 添加请求到固定窗口
+    function addRequestToFixedWindow(time) {
+      const container = document.getElementById('fixed-window-container');
+      const windowSize = parseInt(windowSizeInput.value);
+      const limit = parseInt(limitInput.value);
+      
+      // 计算当前窗口
+      const currentWindow = Math.floor(time / windowSize);
+      
+      // 计算当前窗口内的请求数
+      const currentWindowRequests = fixedWindowRequests.filter(req => 
+        Math.floor(req.time / windowSize) === currentWindow
+      );
+      
+      // 判断是否超过限流
+      const isLimited = currentWindowRequests.length >= limit;
+      
+      // 创建请求元素
+      const request = document.createElement('div');
+      request.className = `request absolute w-4 h-4 rounded-full ${isLimited ? 'bg-danger' : 'bg-success'} request-pulse`;
+      
+      // 计算水平位置 (0-100%)
+      const xPos = (time / 5) * 100; // 总时长5秒
+      request.style.left = `${xPos}%`;
+      
+      // 计算垂直位置（避免重叠）
+      const yPos = 10 + (currentWindowRequests.length % 8) * 8; // 8行
+      request.style.top = `${yPos}%`;
+      
+      // 添加到容器
+      container.appendChild(request);
+      
+      // 记录请求
+      fixedWindowRequests.push({
+        element: request,
+        time: time,
+        window: currentWindow,
+        isLimited: isLimited
+      });
+      
+      // 更新状态
+      updateFixedWindowStatus(windowSize, limit);
+      
+      // 设置自动移除（5秒后）
+      setTimeout(() => {
+        if (request.parentNode) {
+          request.parentNode.removeChild(request);
+        }
+        // 从数组中移除
+        fixedWindowRequests = fixedWindowRequests.filter(req => req.element !== request);
+        updateFixedWindowStatus(windowSize, limit);
+      }, 5000);
+    }
+    
+    // 添加请求到滑动窗口
+    function addRequestToSlidingWindow(time) {
+      const container = document.getElementById('sliding-window-container');
+      const windowSize = parseInt(windowSizeInput.value);
+      const limit = parseInt(limitInput.value);
+      
+      // 计算当前窗口内的请求数（当前时间 - windowSize 到当前时间）
+      const currentWindowRequests = slidingWindowRequests.filter(req => 
+        req.time > time - windowSize
+      );
+      
+      // 判断是否超过限流
+      const isLimited = currentWindowRequests.length >= limit;
+      
+      // 创建请求元素
+      const request = document.createElement('div');
+      request.className = `request absolute w-4 h-4 rounded-full ${isLimited ? 'bg-danger' : 'bg-success'} request-pulse`;
+      
+      // 计算水平位置 (0-100%)
+      const xPos = (time / 5) * 100; // 总时长5秒
+      request.style.left = `${xPos}%`;
+      
+      // 计算垂直位置（避免重叠）
+      const yPos = 10 + (currentWindowRequests.length % 8) * 8; // 8行
+      request.style.top = `${yPos}%`;
+      
+      // 添加到容器
+      container.appendChild(request);
+      
+      // 记录请求
+      slidingWindowRequests.push({
+        element: request,
+        time: time,
+        isLimited: isLimited
+      });
+      
+      // 更新状态
+      updateSlidingWindowStatus(windowSize, limit);
+      
+      // 设置自动移除（5秒后）
+      setTimeout(() => {
+        if (request.parentNode) {
+          request.parentNode.removeChild(request);
+        }
+        // 从数组中移除
+        slidingWindowRequests = slidingWindowRequests.filter(req => req.element !== request);
+        updateSlidingWindowStatus(windowSize, limit);
+      }, 5000);
+    }
+    
+    // 更新固定窗口状态
+    function updateFixedWindow(windowSize, limit) {
+      const currentWindow = Math.floor(currentTime / windowSize);
+      
+      // 更新当前窗口高亮位置
+      const windowStart = (currentWindow * windowSize / 5) * 100;
+      const windowWidth = (windowSize / 5) * 100;
+      
+      document.getElementById('fixed-current-window').style.left = `${windowStart}%`;
+      document.getElementById('fixed-current-window').style.width = `${windowWidth}%`;
+      
+      // 更新状态
+      updateFixedWindowStatus(windowSize, limit);
+    }
+    
+    // 更新固定窗口状态文本
+    function updateFixedWindowStatus(windowSize, limit) {
+      const currentWindow = Math.floor(currentTime / windowSize);
+      const currentCount = fixedWindowRequests.filter(req => 
+        Math.floor(req.time / windowSize) === currentWindow
+      ).length;
+      
+      document.getElementById('fixed-count').textContent = currentCount;
+      
+      if (currentCount >= limit) {
+        document.getElementById('fixed-status').textContent = '限流中';
+        document.getElementById('fixed-status').className = 'font-medium text-danger';
+      } else {
+        document.getElementById('fixed-status').textContent = '正常';
+        document.getElementById('fixed-status').className = 'font-medium text-success';
+      }
+    }
+    
+    // 更新滑动窗口
+    function updateSlidingWindow(windowSize, limit) {
+      // 更新当前窗口位置
+      const windowStart = Math.max(0, (currentTime - windowSize) / 5 * 100);
+      const windowWidth = (windowSize / 5) * 100;
+      
+      document.getElementById('sliding-current-window').style.left = `${windowStart}%`;
+      document.getElementById('sliding-current-window').style.width = `${windowWidth}%`;
+      
+      // 更新状态
+      updateSlidingWindowStatus(windowSize, limit);
+    }
+    
+    // 更新滑动窗口状态文本
+    function updateSlidingWindowStatus(windowSize, limit) {
+      const currentCount = slidingWindowRequests.filter(req => 
+        req.time > currentTime - windowSize
+      ).length;
+      
+      document.getElementById('sliding-count').textContent = currentCount;
+      
+      if (currentCount >= limit) {
+        document.getElementById('sliding-status').textContent = '限流中';
+        document.getElementById('sliding-status').className = 'font-medium text-danger';
+      } else {
+        document.getElementById('sliding-status').textContent = '正常';
+        document.getElementById('sliding-status').className = 'font-medium text-success';
+      }
+    }
+    
+    // 初始化
+    updateWindowVisualization();
+  </script>
+</body>
+</html>
